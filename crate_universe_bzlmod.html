@@ -3,7 +3,7 @@
     <head>
         <!-- Book generated using mdBook -->
         <meta charset="UTF-8">
-        <title>crate_universe (bzlmod) - rules_rust</title>
+        <title>crate_universe - rules_rust</title>
 
 
         <!-- Custom HTML head -->
@@ -181,7 +181,7 @@
 </ol>
 <h2 id="setup"><a class="header" href="#setup">Setup</a></h2>
 <p>To use rules_rust in a project using bzlmod, add the following to your MODULE.bazel file:</p>
-<pre><code class="language-python">bazel_dep(name = "rules_rust", version = "0.69.0")
+<pre><code class="language-python">bazel_dep(name = "rules_rust", version = "0.70.0")
 </code></pre>
 <p>You find the latest version on the <a href="https://github.com/bazelbuild/rules_rust/releases">release page</a>.</p>
 <p>After adding <code>rules_rust</code> in your <code>MODULE.bazel</code>, set the following to begin using <code>crate_universe</code>:</p>
@@ -215,18 +215,19 @@ use_repo(crate, "crates")
 make sure you set the <code>CARGO_BAZEL_ISOLATED=false bazel build //...</code> environmental.  If not <code>crates_universe</code>
 will not be able to pull from your private registry.</p>
 <p>The generated crates_repository contains helper macros which make collecting dependencies for Bazel targets simpler.
-Notably, the all_crate_deps and aliases macros (
+Notably, the all_crate_deps, aliases, and crate_edition macros (
 see <a href="https://bazelbuild.github.io/rules_rust/crate_universe_workspace.html#dependencies-api">Dependencies API</a>) commonly allow the
 Cargo.toml files to be the single source of truth for dependencies.
-Since these macros come from the generated repository, the dependencies and alias definitions
-they return will automatically update BUILD targets. In your BUILD files,
+Since these macros come from the generated repository, the dependency labels,
+alias definitions, and editions they return will automatically update BUILD targets. In your BUILD files,
 you use these macros for a Rust library as shown below:</p>
-<pre><code class="language-python">load("@crates//:defs.bzl", "aliases", "all_crate_deps")
+<pre><code class="language-python">load("@crates//:defs.bzl", "aliases", "all_crate_deps", "crate_edition")
 load("@rules_rust//rust:defs.bzl", "rust_library", "rust_test")
 
 rust_library(
     name = "lib",
     aliases = aliases(),
+    edition = crate_edition(),
     deps = all_crate_deps(
         normal = True,
     ),
@@ -242,6 +243,7 @@ rust_test(
         normal_dev = True,
         proc_macro_dev = True,
     ),
+    edition = crate_edition(),
     deps = all_crate_deps(
         normal_dev = True,
     ),
@@ -255,6 +257,7 @@ in your build file:</p>
 <pre><code class="language-python">rust_binary(
     name = "bin",
     srcs = ["src/main.rs"],
+    edition = crate_edition(),
     deps = all_crate_deps(normal = True),
 )
 </code></pre>
@@ -310,14 +313,14 @@ Only a cargo workspace needs updating whenever the underlying Cargo.toml file ch
 <p>We don't have such easy facilities available in bazel besides specifying it as a dependency.
 To mimic cargo's bindeps feature we use the unstable feature called <a href="https://doc.rust-lang.org/nightly/cargo/reference/unstable.html?highlight=feature#artifact-dependencies">artifact-dependencies</a>
 which integrates well with bazel concepts.</p>
-<p>You could use the syntax specified in the above document to place it in <code>Cargo.toml</code>. For that you can consult the following <a href="https://github.com/bazelbuild/rules_rust/blob/main/examples/crate_universe/MODULE.bazel#L279-L291">example</a>.</p>
+<p>You could use the syntax specified in the above document to place it in <code>Cargo.toml</code>. For that you can consult the following <a href="https://github.com/bazelbuild/rules_rust/blob/main/crate_universe/tests/integration/cargo_bindeps/MODULE.bazel">example</a>.</p>
 <p>This method has the following consequences:</p>
 <ul>
 <li>if you use shared dependency tree with your project these binary dependencies will interfere with yours (may conflict)</li>
 <li>you have to use  nightly <code>host_tools</code> to generate dependencies because</li>
 </ul>
 <p>Alternatively you can specify this in a separate <code>repo</code> with <code>cargo.from_specs</code> syntax:</p>
-<pre><code class="language-python">bindeps = use_extension("@rules_rust//crate_universe:extension.bzl", "crate")
+<pre><code class="language-python">bindeps = use_extension("@rules_rust//crate_universe:extensions.bzl", "crate")
 
 bindeps.spec(package = "cargo-machete", version = "=0.7.0", artifact = "bin")
 bindeps.annotation(crate = "cargo-machete", gen_all_binaries = True)
@@ -351,7 +354,7 @@ You find a complete example in the in the <a href="https://github.com/bazelbuild
 bazel_dep(name = "bazel_skylib", version = "1.8.2")
 
 # https://github.com/bazelbuild/rules_rust/releases
-bazel_dep(name = "rules_rust", version = "0.69.0")
+bazel_dep(name = "rules_rust", version = "0.70.0")
 
 ###############################################################################
 # T O O L C H A I N S
@@ -684,7 +687,7 @@ can be found below where the supported keys for each template can be found in th
                                 <i class="fa fa-angle-left"></i>
                             </a>
 
-                            <a rel="next prefetch" href="crate_universe_workspace.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                            <a rel="next prefetch" href="upstream_tooling.html" class="mobile-nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                                 <i class="fa fa-angle-right"></i>
                             </a>
 
@@ -698,7 +701,7 @@ can be found below where the supported keys for each template can be found in th
                         <i class="fa fa-angle-left"></i>
                     </a>
 
-                    <a rel="next prefetch" href="crate_universe_workspace.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
+                    <a rel="next prefetch" href="upstream_tooling.html" class="nav-chapters next" title="Next chapter" aria-label="Next chapter" aria-keyshortcuts="Right">
                         <i class="fa fa-angle-right"></i>
                     </a>
             </nav>
