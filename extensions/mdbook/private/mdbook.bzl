@@ -10,7 +10,15 @@ MdBookInfo = provider(
 )
 
 def _map_inputs(file):
-    return "{}={}".format(file.path, file.short_path)
+    dest = file.short_path
+    if dest.startswith("../"):
+        # External repositories have short_paths starting with '../'.
+        # We need them to be staged at 'external/' within our shadow
+        # directory to match how 'file.path' (and thus 'file.dirname')
+        # refers to them.
+        dest = "external/" + dest.removeprefix("../")
+
+    return "{}={}".format(file.path, dest)
 
 def _mdbook_impl(ctx):
     output = ctx.actions.declare_directory(ctx.label.name)
