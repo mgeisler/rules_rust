@@ -94,6 +94,60 @@ bazel run @rules_rust//tools/rust_analyzer:setup -- helix
 Prints a `languages.toml` snippet. Paste it into
 `<workspace>/.helix/languages.toml`. Restart Helix.
 
+### Emacs (Eglot)
+
+```
+bazel run @rules_rust//tools/rust_analyzer:setup -- emacs
+```
+
+Installs launcher shims under `<workspace>/.rules_rust_analyzer/` and prints a
+one-time `eglot-server-programs` snippet to add to your init. The snippet
+registers the Bazel rust-analyzer **and** carries the project config
+(`discoverConfig`, proc-macro server, rustfmt, lens) under
+`:initializationOptions`. It's project-relative and generic — a single paste
+serves every rules_rust project; each developer runs `setup` once to populate
+the gitignored launcher dir.
+
+```elisp
+(with-eval-after-load 'eglot
+  (add-to-list 'eglot-server-programs
+               '((rust-ts-mode rust-mode) .
+                 (lambda (&optional _interactive project)
+                   (let ((dir (expand-file-name ".rules_rust_analyzer/" (project-root project))))
+                     (list (expand-file-name "rust_analyzer.exe" dir)
+                           :initializationOptions
+                           (list :workspace
+                                 (list :discoverConfig
+                                       (list :command (vector (expand-file-name "discover_bazel_rust_project.exe" dir))
+                                             :progressLabel "rules_rust"
+                                             :filesToWatch ["BUILD" "BUILD.bazel" "MODULE.bazel" "WORKSPACE" "WORKSPACE.bazel"]))
+                                 :procMacro (list :server (expand-file-name "rust_analyzer_proc_macro_srv.exe" dir))
+                                 :rustfmt (list :overrideCommand (vector (expand-file-name "rustfmt.exe" dir)))
+                                 :lens (list :enable t))))))))
+```
+
+The config **must** ride on `:initializationOptions`, not
+`eglot-workspace-configuration`. rust-analyzer wires up `discoverConfig`-based
+project discovery at `initialize` time; config delivered later through Eglot's
+`workspace/configuration` pull (how `eglot-workspace-configuration` is served)
+arrives too late and rust-analyzer falls back to Cargo. There is therefore no
+`.dir-locals.el` and no "risky local variable" prompt.
+
+Add the launcher dir to `.gitignore`:
+
+```
+.rules_rust_analyzer/
+```
+
+Re-run `setup emacs` after a toolchain bump (rustup update, `MODULE.bazel`
+change, `bazel clean --expunge`) to refresh the launcher dir. The init snippet
+itself is unchanged — it resolves every path at connect time via
+`project-root`.
+
+`lsp-mode` isn't targeted by `setup`: it configures rust-analyzer through its
+own `lsp-rust-analyzer-*` variables rather than a portable settings object, and
+has no first-class knob for `discoverConfig`.
+
 ### Other editors (`coc.nvim`, `vim-lsp`, ALE, etc.)
 
 ```
@@ -149,7 +203,7 @@ rm -rf <workspace>/<editor-dir>/.rules_rust_analyzer/cache
 ```
 
 Where `<editor-dir>` is `.vscode` for VSCode, `.helix` for Helix, or
-empty for Neovim / `print` (cache sits at `<workspace>/.rules_rust_analyzer/cache`).
+empty for Neovim / Emacs / `print` (cache sits at `<workspace>/.rules_rust_analyzer/cache`).
 
 The cache survives `bazel clean` by design (it lives in the workspace,
 not the Bazel output base) so a full Bazel rebuild won't invalidate

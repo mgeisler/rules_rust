@@ -162,10 +162,16 @@ enum IdeCmd {
     /// print a `languages.toml` snippet to stdout.
     Helix,
 
+    /// Write a committable `.dir-locals.el` and install source
+    /// binaries + launcher shims under `.rules_rust_analyzer/`; print
+    /// the one-time `eglot-server-programs` init snippet.
+    Emacs,
+
     /// Install source binaries under `.rules_rust_analyzer/` and print
     /// the editor-agnostic JSON snippet (same `rust-analyzer.*` keys
     /// VSCode uses; works with coc.nvim and similar JSON-config LSP
-    /// clients).
+    /// clients). The generic fallback for editors without a dedicated
+    /// subcommand.
     Print,
 }
 
@@ -224,7 +230,7 @@ fn main() -> Result<()> {
     // basis, and we don't want to compute it twice.
     let vscode_targets = match &ide {
         IdeCmd::Vscode(args) => Some(resolve_vscode_targets(&workspace, args)?),
-        IdeCmd::Neovim | IdeCmd::Helix | IdeCmd::Print => None,
+        IdeCmd::Neovim | IdeCmd::Helix | IdeCmd::Print | IdeCmd::Emacs => None,
     };
     let launcher_dir = launcher_dir_for(&workspace, &ide, vscode_targets.as_ref());
 
@@ -239,10 +245,12 @@ fn main() -> Result<()> {
     };
 
     install_source_binaries(&launcher_dir, &runfiles)?;
-    // Launcher shims are only referenced by the VSCode subcommand's
-    // managed keys; neovim / helix / print snippets bake absolute
-    // toolchain paths directly and don't go through the launchers.
-    if matches!(ide, IdeCmd::Vscode(_)) {
+    // Launcher shims are referenced by the VSCode subcommand's managed
+    // keys and by the Emacs `.dir-locals.el` (both keep committed config
+    // free of per-developer paths by pointing at stable shim paths). The
+    // neovim / helix / print snippets bake absolute toolchain paths
+    // directly and don't go through the launchers.
+    if matches!(ide, IdeCmd::Vscode(_) | IdeCmd::Emacs) {
         install_toolchain_launchers(&launcher_dir, &runfiles, &toolchain)?;
     }
 
@@ -260,6 +268,7 @@ fn main() -> Result<()> {
         IdeCmd::Neovim => run_neovim(&ctx),
         IdeCmd::Helix => run_helix(&ctx),
         IdeCmd::Print => run_print(&ctx),
+        IdeCmd::Emacs => run_emacs(&ctx),
     }
 }
 
@@ -460,6 +469,21 @@ fn run_print(ctx: &SetupCtx) -> Result<()> {
 }
 
 // ---------------------------------------------------------------------------
+// Emacs (Eglot) subcommand
+// ---------------------------------------------------------------------------
+
+fn run_emacs(ctx: &SetupCtx) -> Result<()> {
+    // The rules_rust config rides on `:initializationOptions` in the server
+    // snippet (see `generate_emacs_server_snippet`), not a `.dir-locals.el`, so
+    // there is nothing to write into the workspace — just print the snippet.
+    print_snippet_with_banner(
+        "Add this to your Emacs init once (registers the Bazel rust-analyzer with Eglot):",
+        &generate_emacs_server_snippet(ctx),
+    );
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------
 // Source-binary install
 // ---------------------------------------------------------------------------
 
@@ -587,9 +611,10 @@ fn launcher_dir_for(
             .join(LAUNCHER_SUBDIR),
         IdeCmd::Helix => workspace.join(".helix").join(LAUNCHER_SUBDIR),
         // Neovim has no canonical per-project dotdir; print covers
-        // editor-agnostic JSON-config LSP clients. Both land at the
-        // workspace root.
-        IdeCmd::Neovim | IdeCmd::Print => workspace.join(LAUNCHER_SUBDIR),
+        // editor-agnostic JSON-config LSP clients; Emacs resolves the
+        // launcher dir relative to the project root (where `.dir-locals.el`
+        // lives). All three land at the workspace root.
+        IdeCmd::Neovim | IdeCmd::Print | IdeCmd::Emacs => workspace.join(LAUNCHER_SUBDIR),
     }
 }
 
@@ -1190,6 +1215,81 @@ fn generate_settings_json(ctx: &SetupCtx, launcher_dir: &Utf8Path) -> String {
         SETTINGS_JSON_PROC_MACRO,
         SETTINGS_JSON_RUSTFMT,
         SETTINGS_JSON_EXCLUDES,
+    )
+}
+
+// -- Emacs (Eglot) Elisp --
+//
+// Everything ships in one `eglot-server-programs` init snippet: the
+// rust-analyzer binary plus the project config under `:initializationOptions`
+// (see `generate_emacs_server_snippet` for why the config must go there and
+// not in `eglot-workspace-configuration`). Paths resolve project-relative at
+// connect time via `project-root`, so the snippet carries no per-developer
+// paths and one paste serves every rules_rust project.
+
+/// `filesToWatch`, as an Elisp vector-literal body (space-separated).
+const EMACS_FILES_TO_WATCH: &str =
+    r#""BUILD" "BUILD.bazel" "MODULE.bazel" "WORKSPACE" "WORKSPACE.bazel""#;
+
+/// One-time init snippet: registers the Bazel rust-analyzer with Eglot AND
+/// carries the rules_rust project config in `:initializationOptions`.
+///
+/// The config MUST ride on `initializationOptions` (part of the LSP
+/// `initialize` request), not `eglot-workspace-configuration`. rust-analyzer
+/// wires up `discoverConfig`-based project discovery at initialize time;
+/// config delivered later through the `workspace/configuration` pull — which
+/// is how Eglot answers `eglot-workspace-configuration` — arrives too late and
+/// it falls back to Cargo. The lambda resolves every path relative to the
+/// project root at connect time via `project-root`, so one paste serves every
+/// rules_rust project (no per-project `.dir-locals.el`).
+fn generate_emacs_server_snippet(ctx: &SetupCtx) -> String {
+    let per_package = if ctx.per_package_workspaces {
+        " \"{arg}\""
+    } else {
+        ""
+    };
+
+    // Optional plist entries. Elisp plists are whitespace-delimited, so an
+    // omitted entry needs no comma bookkeeping.
+    let proc_macro = if ctx.skip_proc_macro_server {
+        String::new()
+    } else {
+        format!(
+            "\n                                 :procMacro (list :server (expand-file-name {:?} dir))",
+            launcher_filename("rust_analyzer_proc_macro_srv"),
+        )
+    };
+    let rustfmt = if ctx.skip_rustfmt {
+        String::new()
+    } else {
+        format!(
+            "\n                                 :rustfmt (list :overrideCommand (vector (expand-file-name {:?} dir)))",
+            launcher_filename("rustfmt"),
+        )
+    };
+
+    format!(
+        r#"(with-eval-after-load 'eglot
+  (add-to-list 'eglot-server-programs
+               '((rust-ts-mode rust-mode) .
+                 (lambda (&optional _interactive project)
+                   (let ((dir (expand-file-name {subdir:?} (project-root project))))
+                     (list (expand-file-name {server:?} dir)
+                           :initializationOptions
+                           (list :workspace
+                                 (list :discoverConfig
+                                       (list :command (vector (expand-file-name {discover:?} dir){per_package})
+                                             :progressLabel "rules_rust"
+                                             :filesToWatch [{files}])){proc_macro}{rustfmt}
+                                 :lens (list :enable t))))))))
+"#,
+        subdir = format!("{LAUNCHER_SUBDIR}/"),
+        server = launcher_filename("rust_analyzer"),
+        discover = DISCOVER_BINARY_FILENAME,
+        per_package = per_package,
+        files = EMACS_FILES_TO_WATCH,
+        proc_macro = proc_macro,
+        rustfmt = rustfmt,
     )
 }
 
@@ -2012,5 +2112,91 @@ mod tests {
             "/obase/external/rfmt/rustfmt"
         );
         let _ = std::fs::remove_dir_all(&tmp);
+    }
+
+    // -----------------------------------------------------------------
+    // Emacs (Eglot)
+    // -----------------------------------------------------------------
+
+    /// Cheap structural check: the emitted Elisp must have balanced
+    /// parens. No paren appears inside any emitted string literal or
+    /// comment, so a naive count is sufficient (and catches a
+    /// miscounted closing run in the template).
+    fn assert_balanced_parens(elisp: &str) {
+        let opens = elisp.matches('(').count();
+        let closes = elisp.matches(')').count();
+        assert_eq!(
+            opens, closes,
+            "unbalanced parens ({opens} open, {closes} close) in:\n{elisp}"
+        );
+    }
+
+    #[test]
+    fn emacs_server_snippet_carries_init_options_and_is_project_relative() {
+        let (ctx, _) = dummy_ctx();
+        let el = generate_emacs_server_snippet(&ctx);
+        assert_balanced_parens(&el);
+        // Config rides on initializationOptions, NOT the (too-late)
+        // workspace/configuration pull.
+        assert!(el.contains(":initializationOptions"));
+        assert!(!el.contains("eglot-workspace-configuration"));
+        // Registered as a server program, resolved project-relative (no
+        // absolute paths baked in).
+        assert!(el.contains("(add-to-list 'eglot-server-programs"));
+        assert!(el.contains("(lambda (&optional _interactive project)"));
+        assert!(el.contains("(expand-file-name \".rules_rust_analyzer/\" (project-root project))"));
+        assert!(el.contains("rust_analyzer.exe"));
+        assert!(el.contains("discoverConfig"));
+        assert!(el.contains("discover_bazel_rust_project.exe"));
+        assert!(el.contains(":progressLabel \"rules_rust\""));
+        assert!(el.contains(":lens (list :enable t)"));
+        // The dummy toolchain paths (an absolute Bazel-cache path) must NOT
+        // leak into the snippet — everything resolves at connect time.
+        assert!(
+            !el.contains("/obase/"),
+            "server snippet must not embed absolute toolchain paths:\n{el}"
+        );
+    }
+
+    #[test]
+    fn emacs_server_snippet_skip_flags_drop_optional_blocks() {
+        let (mut ctx, _) = dummy_ctx();
+        ctx.skip_proc_macro_server = true;
+        ctx.skip_rustfmt = true;
+        let el = generate_emacs_server_snippet(&ctx);
+        assert_balanced_parens(&el);
+        assert!(!el.contains(":procMacro"), "procMacro leaked:\n{el}");
+        assert!(!el.contains(":rustfmt"), "rustfmt leaked:\n{el}");
+        // Required pieces still present.
+        assert!(el.contains(":initializationOptions"));
+        assert!(el.contains("discoverConfig"));
+        assert!(el.contains(":lens (list :enable t)"));
+    }
+
+    #[test]
+    fn emacs_server_snippet_per_package_arg_only_when_opted_in() {
+        let (mut ctx, _) = dummy_ctx();
+        let off = generate_emacs_server_snippet(&ctx);
+        assert!(
+            !off.contains("\"{arg}\""),
+            "leaked {{arg}} when off:\n{off}"
+        );
+        assert_balanced_parens(&off);
+
+        ctx.per_package_workspaces = true;
+        let on = generate_emacs_server_snippet(&ctx);
+        assert!(on.contains("\"{arg}\""), "missing {{arg}} when on:\n{on}");
+        assert_balanced_parens(&on);
+    }
+
+    #[test]
+    fn emacs_server_snippet_is_project_relative() {
+        let (ctx, _) = dummy_ctx();
+        let snippet = generate_emacs_server_snippet(&ctx);
+        assert_balanced_parens(&snippet);
+        assert!(snippet.contains("eglot-server-programs"));
+        assert!(snippet.contains("(rust-ts-mode rust-mode)"));
+        assert!(snippet.contains("rust_analyzer.exe"));
+        assert!(snippet.contains("(project-root project)"));
     }
 }
