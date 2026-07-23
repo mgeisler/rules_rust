@@ -4,22 +4,20 @@ This file is auto-generated for each release to match the urls and sha256s of
 the binaries produced for it.
 """
 
-# Example:
-# {
-#     "x86_64-unknown-linux-gnu": "https://domain.com/downloads/cargo-bazel-x86_64-unknown-linux-gnu",
-#     "x86_64-apple-darwin": "https://domain.com/downloads/cargo-bazel-x86_64-apple-darwin",
-#     "x86_64-pc-windows-msvc": "https://domain.com/downloads/cargo-bazel-x86_64-pc-windows-msvc",
-# }
-CARGO_BAZEL_URLS = {}
+CARGO_BAZEL_URLS = {
+    "aarch64-apple-darwin": "https://github.com/mgeisler/rules_rust/releases/download/cargo-bazel-prebuilt/cargo-bazel-aarch64-apple-darwin",
+    "x86_64-unknown-linux-musl": "https://github.com/mgeisler/rules_rust/releases/download/cargo-bazel-prebuilt/cargo-bazel-x86_64-unknown-linux-musl",
+    "x86_64-unknown-linux-gnu": "https://github.com/mgeisler/rules_rust/releases/download/cargo-bazel-prebuilt/cargo-bazel-x86_64-unknown-linux-musl",
+    "aarch64-unknown-linux-musl": "https://github.com/mgeisler/rules_rust/releases/download/cargo-bazel-prebuilt/cargo-bazel-aarch64-unknown-linux-musl",
+    "aarch64-unknown-linux-gnu": "https://github.com/mgeisler/rules_rust/releases/download/cargo-bazel-prebuilt/cargo-bazel-aarch64-unknown-linux-musl",
+}
 
-# Example:
-# {
-#     "x86_64-unknown-linux-gnu": "1d687fcc860dc8a1aa6198e531f0aee0637ed506d6a412fe2b9884ff5b2b17c0",
-#     "x86_64-apple-darwin": "0363e450125002f581d29cf632cc876225d738cfa433afa85ca557afb671eafa",
-#     "x86_64-pc-windows-msvc": "f5647261d989f63dafb2c3cb8e131b225338a790386c06cf7112e43dd9805882",
-# }
-CARGO_BAZEL_SHA256S = {}
+CARGO_BAZEL_SHA256S = {
+    "aarch64-apple-darwin": "5e1617849de558489d2f653644a1ad0c99c4b993fc137f14a7ea890cf06e45d3",
+    "x86_64-unknown-linux-musl": "db72b6ce92031033ffd50d5147ab78d39f5656eb0980bee276d013bc6e3e2260",
+    "x86_64-unknown-linux-gnu": "db72b6ce92031033ffd50d5147ab78d39f5656eb0980bee276d013bc6e3e2260",
+    "aarch64-unknown-linux-musl": "f056c801b59730a2c7cc24fd3606d596d54910068305991b2aa822c32949d4de",
+    "aarch64-unknown-linux-gnu": "f056c801b59730a2c7cc24fd3606d596d54910068305991b2aa822c32949d4de",
+}
 
-# Example:
-# Label("//crate_universe:cargo_bazel_bin")
-CARGO_BAZEL_LABEL = Label("@cargo_bazel_bootstrap//:binary")
+CARGO_BAZEL_LABEL = Label("//crate_universe:cargo_bazel_bin")
