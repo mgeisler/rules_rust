@@ -37,6 +37,16 @@ pub fn remove_symlink(path: &Path) -> Result<(), std::io::Error> {
     }
 }
 
+/// Remove `path` only when it is a symlink.
+pub fn remove_symlink_if_symlink(path: &Path) -> Result<(), std::io::Error> {
+    match std::fs::symlink_metadata(path) {
+        Ok(meta) if meta.file_type().is_symlink() => remove_symlink(path),
+        Ok(_) => Ok(()),
+        Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(()),
+        Err(e) => Err(e),
+    }
+}
+
 /// Check if the system supports symlinks by attempting to create one.
 fn system_supports_symlinks(test_dir: &Path) -> Result<bool, String> {
     let test_file = test_dir.join("cbsr.txt");

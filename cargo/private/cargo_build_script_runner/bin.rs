@@ -21,7 +21,7 @@ use std::fs::{create_dir_all, read_dir, read_to_string, remove_file, write};
 use std::path::{Path, PathBuf};
 use std::process::Command;
 
-use cargo_build_script_runner::cargo_manifest_dir::{remove_symlink, symlink, RunfilesMaker};
+use cargo_build_script_runner::cargo_manifest_dir::{remove_symlink_if_symlink, symlink, RunfilesMaker};
 use cargo_build_script_runner::{BuildScriptOutput, CompileAndLinkFlags, SUPPRESS_WARNINGS_ENV};
 
 fn run_buildrs() -> Result<(), String> {
@@ -75,10 +75,11 @@ fn run_buildrs() -> Result<(), String> {
                 .ok_or_else(|| "Failed while getting file name".to_string())?;
             let link = manifest_dir.join(file_name);
 
-            symlink_if_not_exists(&path, &link)
-                .map_err(|err| format!("Failed to symlink {path:?} to {link:?}: {err}"))?;
-
-            exec_root_links.push(link)
+            if symlink_if_not_exists(&path, &link)
+                .map_err(|err| format!("Failed to symlink {path:?} to {link:?}: {err}"))?
+            {
+                exec_root_links.push(link);
+            }
         }
     }
 
@@ -237,7 +238,7 @@ fn run_buildrs() -> Result<(), String> {
 
     if !exec_root_links.is_empty() {
         for link in exec_root_links {
-            remove_symlink(&link).map_err(|e| {
+            remove_symlink_if_symlink(&link).map_err(|e| {
                 format!(
                     "Failed to remove exec_root link '{}' with {:?}",
                     link.display(),
@@ -360,9 +361,13 @@ fn set_script_runfiles_env(script_path: &Path, command: &mut Command) {
 }
 
 /// Create a symlink from `link` to `original` if `link` doesn't already exist.
-fn symlink_if_not_exists(original: &Path, link: &Path) -> Result<(), String> {
+fn symlink_if_not_exists(original: &Path, link: &Path) -> Result<bool, String> {
+    if std::fs::symlink_metadata(link).is_ok() {
+        return Ok(false);
+    }
+
     symlink(original, link)
-        .or_else(swallow_already_exists)
+        .map(|_| true)
         .map_err(|err| format!("Failed to create symlink: {err}"))
 }
 
@@ -381,14 +386,6 @@ fn resolve_rundir(rundir: &str, exec_root: &Path, manifest_dir: &Path) -> Result
         return Err(format!("rundir must not contain .. but was {:?}", rundir));
     }
     Ok(exec_root.join(rundir_path))
-}
-
-fn swallow_already_exists(err: std::io::Error) -> std::io::Result<()> {
-    if err.kind() == std::io::ErrorKind::AlreadyExists {
-        Ok(())
-    } else {
-        Err(err)
-    }
 }
 
 /// A representation of expected command line arguments.
