@@ -1,0 +1,139 @@
+---
+# Publishes an immutable release for every push to proton-patches. The
+# release holds the cargo-bazel binaries we use and a source archive
+# whose urls.bzl points at them, so consumers pin the archive.
+name: Proton release
+on:
+  push:
+    branches:
+      - proton-patches
+  workflow_dispatch:
+
+defaults:
+  run:
+    shell: bash
+
+env:
+  BAZEL_STARTUP_FLAGS: --bazelrc=${{ github.workspace }}/.github/github.bazelrc
+
+jobs:
+  builds:
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: macOS-14
+            env:
+              TARGET: "aarch64-apple-darwin"
+          - os: ubuntu-22.04
+            env:
+              TARGET: "aarch64-unknown-linux-musl"
+          - os: ubuntu-22.04
+            env:
+              TARGET: "x86_64-unknown-linux-musl"
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install rust toolchains for host
+        run: |
+          # Detect the current version of rust
+          version="$(grep 'DEFAULT_RUST_VERSION =' ./rust/private/common.bzl | grep -o '[[:digit:].]\+')"
+          rustup override set "${version}"
+          rustup target add ${TARGET}
+          rustup update stable --no-self-update --force-non-host
+          rustup default stable
+        env:
+          TARGET: "${{ matrix.env.TARGET }}"
+      - name: Setup macos build tooling
+        run: |
+          sudo xcode-select -s /Applications/Xcode_16.1.app/Contents/Developer/
+          echo "SDKROOT=$(xcrun -sdk ${{ env.TARGET_SDK }} --show-sdk-path)" >> $GITHUB_ENV
+          MACOSX_DEPLOYMENT_TARGET="$(xcrun -sdk ${{ env.TARGET_SDK }} --show-sdk-platform-version)"
+          if [[ -n "${MACOSX_DEPLOYMENT_TARGET}" ]]; then
+            echo "MACOSX_DEPLOYMENT_TARGET=${MACOSX_DEPLOYMENT_TARGET}" >> $GITHUB_ENV
+          fi
+        env:
+          TARGET_SDK: macosx15.1
+        if: startswith(matrix.os, 'macos')
+      - name: Build cargo-bazel binaries
+        run: |
+          bazel ${BAZEL_STARTUP_FLAGS[@]} run //crate_universe/tools/cross_installer -- \
+            --target=${TARGET} \
+            --output="${{ github.workspace }}/crate_universe/target/artifacts"
+        env:
+          TARGET: "${{ matrix.env.TARGET }}"
+      - uses: actions/upload-artifact@v4
+        with:
+          name: "${{ matrix.env.TARGET }}"
+          path: ${{ github.workspace }}/crate_universe/target/artifacts/${{ matrix.env.TARGET }}
+          if-no-files-found: error
+
+  release:
+    needs: builds
+    runs-on: ubuntu-22.04
+    permissions:
+      contents: write
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          path: ${{ runner.temp }}/artifacts
+      - name: Publish release
+        run: |
+          set -euo pipefail
+
+          tag="proton-${GITHUB_SHA::12}"
+          url_prefix="https://github.com/${GITHUB_REPOSITORY}/releases/download/${tag}"
+          out="${RUNNER_TEMP}/release"
+          mkdir -p "${out}"
+
+          for triple in aarch64-apple-darwin aarch64-unknown-linux-musl x86_64-unknown-linux-musl; do
+            cp "${RUNNER_TEMP}/artifacts/${triple}/cargo-bazel" "${out}/cargo-bazel-${triple}"
+            chmod +x "${out}/cargo-bazel-${triple}"
+          done
+          sha() { sha256sum "${out}/cargo-bazel-$1" | cut -d ' ' -f 1; }
+
+          # crate_universe looks up Linux hosts under both the musl and
+          # the gnu triple, so the gnu keys reuse the static musl binaries.
+          cat > crate_universe/private/urls.bzl <<EOF
+          """A file containing urls and associated sha256 values for cargo-bazel binaries
+
+          This file is auto-generated for each release to match the urls and sha256s of
+          the binaries produced for it.
+          """
+
+          CARGO_BAZEL_URLS = {
+              "aarch64-apple-darwin": "${url_prefix}/cargo-bazel-aarch64-apple-darwin",
+              "x86_64-unknown-linux-musl": "${url_prefix}/cargo-bazel-x86_64-unknown-linux-musl",
+              "x86_64-unknown-linux-gnu": "${url_prefix}/cargo-bazel-x86_64-unknown-linux-musl",
+              "aarch64-unknown-linux-musl": "${url_prefix}/cargo-bazel-aarch64-unknown-linux-musl",
+              "aarch64-unknown-linux-gnu": "${url_prefix}/cargo-bazel-aarch64-unknown-linux-musl",
+          }
+
+          CARGO_BAZEL_SHA256S = {
+              "aarch64-apple-darwin": "$(sha aarch64-apple-darwin)",
+              "x86_64-unknown-linux-musl": "$(sha x86_64-unknown-linux-musl)",
+              "x86_64-unknown-linux-gnu": "$(sha x86_64-unknown-linux-musl)",
+              "aarch64-unknown-linux-musl": "$(sha aarch64-unknown-linux-musl)",
+              "aarch64-unknown-linux-gnu": "$(sha aarch64-unknown-linux-musl)",
+          }
+
+          CARGO_BAZEL_LABEL = Label("//crate_universe:cargo_bazel_bin")
+          EOF
+
+          archive="${out}/rules_rust-${tag}.tar.gz"
+          tar -czf "${archive}" \
+            --exclude=".git" \
+            --exclude=".github" \
+            .
+          integrity="sha256-$(sha256sum "${archive}" | cut -d ' ' -f 1 | xxd -r -p | base64)"
+
+          gh release create "${tag}" \
+            --target "${GITHUB_SHA}" \
+            --title "${tag}" \
+            --latest=false \
+            --notes "Archive integrity: \`${integrity}\`" \
+            "${archive}" \
+            "${out}"/cargo-bazel-*
+        env:
+          GH_TOKEN: ${{ github.token }}
